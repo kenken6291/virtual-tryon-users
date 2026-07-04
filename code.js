@@ -4,8 +4,7 @@
  *    コードには一切ハードコーディングしない。
  * 2. 認証: スプレッドシート「Users」にusername/passwordHash/saltを保存し、
  *    平文パスワードは一切保存・ログ出力しない（SHA-256 + salt）。
- * 3. ログイン成功時にセッショントークンを発行し、CacheServiceで有効期限管理する
- *    （サーバー側で自動失効するため、盗用されても長期間悪用されにくい）。
+ * 3. ログイン成功時にセッショントークンを発行し、CacheServiceで有効期限管理する。
  * 4. try-on実行時は「APP_TOKEN（アプリ簡易フィルタ）」と「セッショントークン（個人認証）」の
  *    二重チェックを行う（多層防御）。
  * 5. ★画像データ（自分の写真・服の写真・生成結果）はGoogleドライブ等への保存を一切行わず、
@@ -16,14 +15,13 @@
 const PROP_KEYS = {
   APP_TOKEN: 'APP_TOKEN',
   TRYON_API_KEY: 'TRYON_API_KEY',
-  TRYON_API_URL: 'TRYON_API_URL',
   USERS_SHEET_ID: 'USERS_SHEET_ID',
   SESSION_TTL_SEC: 'SESSION_TTL_SEC'
 };
 
-const DEFAULT_TRYON_API_URL = 'https://api.example.com/v1/try-on';
 const DEFAULT_SESSION_TTL_SEC = 1800; // 30分
 const USERS_SHEET_NAME = 'Users'; // ヘッダー: username | passwordHash | salt | displayName
+const LIGHTX_BASE_URL = 'https://api.lightxeditor.com/external/api';
 
 /**
  * GET: Webアプリのエントリーポイント。Index.htmlを返す。
@@ -53,7 +51,6 @@ function doPost(e) {
       return createJsonResponse_(false, null, 'リクエストの形式が不正です。');
     }
 
-    // --- 共通: アプリ簡易トークンの検証（多層防御の1層目） ---
     const scriptProps = PropertiesService.getScriptProperties();
     const validAppToken = scriptProps.getProperty(PROP_KEYS.APP_TOKEN);
     if (!validAppToken) {
@@ -110,7 +107,7 @@ function handleLogin_(payload, scriptProps) {
     return createJsonResponse_(false, null, 'サーバー設定エラーです。', 500);
   }
 
-  const data = sheet.getDataRange().getValues(); // [0]行目はヘッダー想定
+  const data = sheet.getDataRange().getValues();
   let matchedRow = null;
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0]).trim() === username) {
@@ -119,13 +116,11 @@ function handleLogin_(payload, scriptProps) {
     }
   }
 
-  // ユーザーが存在しない場合も、存在する場合と同じ処理時間・同じエラーメッセージにすることで
-  // 「ユーザー存在の有無」が外部から推測されにくいようにする（ユーザー列挙攻撃対策）
+  // ユーザー列挙攻撃対策: 存在しない場合もダミー値で同じ処理時間・同じエラーメッセージにする
   const dummySalt = 'dummy_salt_for_timing';
   const dummyHash = 'dummy_hash';
   const salt = matchedRow ? String(matchedRow[2]) : dummySalt;
   const storedHash = matchedRow ? String(matchedRow[1]) : dummyHash;
-
   const inputHash = hashPassword_(password, salt);
 
   if (!matchedRow || inputHash !== storedHash) {
@@ -133,17 +128,13 @@ function handleLogin_(payload, scriptProps) {
     return createJsonResponse_(false, null, 'ユーザー名またはパスワードが正しくありません。', 401);
   }
 
-  // --- セッショントークン発行 ---
   const sessionToken = Utilities.getUuid();
   const ttlSec = parseInt(scriptProps.getProperty(PROP_KEYS.SESSION_TTL_SEC), 10) || DEFAULT_SESSION_TTL_SEC;
-
   const cache = CacheService.getScriptCache();
-  // CacheServiceの最大有効期限は21600秒(6時間)。ttlSecがそれを超える場合は丸める。
-  const safeTtl = Math.min(ttlSec, 21600);
+  const safeTtl = Math.min(ttlSec, 21600); // CacheServiceの上限は21600秒(6時間)
   cache.put('session_' + sessionToken, username, safeTtl);
 
   const displayName = matchedRow[3] || username;
-
   return createJsonResponse_(true, {
     sessionToken: sessionToken,
     displayName: displayName,
@@ -153,101 +144,204 @@ function handleLogin_(payload, scriptProps) {
 
 /**
  * 試着画像生成処理（要セッショントークン）。
- * 期待するpayload: { action:'tryon', appToken, sessionToken, modelImageBase64, clothImageBase64 }
+ * 期待するpayload: { action:'tryon', appToken, sessionToken,
+ *                     modelFrontImageBase64, modelSideImageBase64, clothImageBase64 }
  * ★画像はDrive等に保存せず、この関数のスコープ内でのみ扱い、
  *   レスポンス返却と同時に変数は破棄される（ガベージコレクション対象）。
  */
 function handleTryOn_(payload, scriptProps) {
-  // --- セッショントークンの検証（多層防御の2層目：個人認証） ---
   const sessionToken = payload.sessionToken;
   if (!sessionToken) {
     return createJsonResponse_(false, null, 'ログインが必要です。', 401);
   }
-
   const cache = CacheService.getScriptCache();
   const username = cache.get('session_' + sessionToken);
   if (!username) {
     return createJsonResponse_(false, null, 'セッションが無効です。再ログインしてください。', 401);
   }
 
-  const modelImageBase64 = payload.modelImageBase64;
+  const modelFrontImageBase64 = payload.modelFrontImageBase64;
+  const modelSideImageBase64 = payload.modelSideImageBase64;
   const clothImageBase64 = payload.clothImageBase64;
 
-  if (!modelImageBase64 || !clothImageBase64) {
+  if (!modelFrontImageBase64 || !modelSideImageBase64 || !clothImageBase64) {
     return createJsonResponse_(false, null, '画像データが不足しています。', 400);
   }
 
-  const MAX_BASE64_LENGTH = 14 * 1024 * 1024; // 約10MBの画像相当（Base64は約1.37倍）
-  if (modelImageBase64.length > MAX_BASE64_LENGTH || clothImageBase64.length > MAX_BASE64_LENGTH) {
+  const MAX_BASE64_LENGTH = 14 * 1024 * 1024; // 約10MBの画像相当
+  if (modelFrontImageBase64.length > MAX_BASE64_LENGTH ||
+      modelSideImageBase64.length > MAX_BASE64_LENGTH ||
+      clothImageBase64.length > MAX_BASE64_LENGTH) {
     return createJsonResponse_(false, null, '画像サイズが大きすぎます。', 400);
   }
 
-  const tryonApiKey = scriptProps.getProperty(PROP_KEYS.TRYON_API_KEY);
-  if (!tryonApiKey) {
+  const apiKey = scriptProps.getProperty(PROP_KEYS.TRYON_API_KEY);
+  if (!apiKey) {
     console.error('TRYON_API_KEY が未設定です。');
     return createJsonResponse_(false, null, 'サーバー設定エラーです。', 500);
   }
-  const tryonApiUrl = scriptProps.getProperty(PROP_KEYS.TRYON_API_URL) || DEFAULT_TRYON_API_URL;
 
-  const externalPayload = {
-    model_image: modelImageBase64,
-    cloth_image: clothImageBase64
-    // 外部APIの仕様に応じてパラメータを追加（例: category, resolutionなど）
-  };
+  try {
+    // ① 3枚の画像をLightXにアップロードしてURL化（服の写真は1回だけアップロードして使い回す）
+    const clothImageUrl = uploadImageToLightX_(clothImageBase64, apiKey);
+    const frontImageUrl = uploadImageToLightX_(modelFrontImageBase64, apiKey);
+    const sideImageUrl = uploadImageToLightX_(modelSideImageBase64, apiKey);
 
-  const fetchOptions = {
+    // ② 正面・横向き、それぞれの生成リクエストを発行
+    const orderIds = {
+      front: submitLightXOrder_(frontImageUrl, clothImageUrl, apiKey),
+      side: submitLightXOrder_(sideImageUrl, clothImageUrl, apiKey)
+    };
+
+    // ③ 両方の結果が揃うまでまとめてポーリング
+    const resultUrls = pollLightXOrders_(orderIds, apiKey);
+
+    // ④ 結果画像をダウンロードしてBase64に変換（フロントの表示ロジックのため）
+    const resultFrontImageBase64 = fetchImageAsBase64_(resultUrls.front);
+    const resultSideImageBase64 = fetchImageAsBase64_(resultUrls.side);
+
+    console.log('try-on success user=' + username);
+    return createJsonResponse_(true, {
+      resultFrontImageBase64: resultFrontImageBase64,
+      resultSideImageBase64: resultSideImageBase64
+    }, null);
+
+  } catch (err) {
+    console.error('LightX処理エラー user=' + username + ' message=' + err.message);
+    return createJsonResponse_(false, null, '試着画像の生成に失敗しました。時間をおいて再度お試しください。', 502);
+  }
+}
+
+/**
+ * LightX用: 画像1枚をアップロードしてURLを取得する。
+ * ①アップロードURL取得 → ②PUTでバイナリアップロード、の2段階。
+ */
+function uploadImageToLightX_(base64DataUrl, apiKey) {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(base64DataUrl);
+  const contentType = match ? match[1] : 'image/jpeg';
+  const base64Data = match ? match[2] : base64DataUrl;
+  const decodedBytes = Utilities.base64Decode(base64Data);
+
+  const uploadUrlResponse = UrlFetchApp.fetch(LIGHTX_BASE_URL + '/v2/uploadImageUrl', {
     method: 'post',
     contentType: 'application/json',
-    headers: {
-      // 認証キーはヘッダー経由で送信し、ログ等に平文で残らないよう配慮
-      'Authorization': 'Bearer ' + tryonApiKey
-    },
-    payload: JSON.stringify(externalPayload),
-    muteHttpExceptions: true // エラーレスポンスも自前でハンドリングするため
-  };
+    headers: { 'x-api-key': apiKey },
+    payload: JSON.stringify({
+      uploadType: 'imageUrl',
+      size: decodedBytes.length,
+      contentType: contentType
+    }),
+    muteHttpExceptions: true
+  });
 
-  let externalResponse;
-  try {
-    externalResponse = UrlFetchApp.fetch(tryonApiUrl, fetchOptions);
-  } catch (fetchErr) {
-    console.error('外部API呼び出しで通信エラー: ' + fetchErr.message);
-    return createJsonResponse_(false, null, '外部サービスとの通信に失敗しました。時間をおいて再度お試しください。', 502);
+  const uploadUrlResult = JSON.parse(uploadUrlResponse.getContentText());
+  const uploadImageTarget = uploadUrlResult.body ? uploadUrlResult.body.uploadImage : uploadUrlResult.uploadImage;
+  const finalImageUrl = uploadUrlResult.body ? uploadUrlResult.body.imageUrl : uploadUrlResult.imageUrl;
+
+  if (!uploadImageTarget || !finalImageUrl) {
+    throw new Error('LightX: アップロードURLの取得に失敗しました。 response=' + uploadUrlResponse.getContentText());
   }
 
-  const statusCode = externalResponse.getResponseCode();
-  const responseText = externalResponse.getContentText();
+  const putResponse = UrlFetchApp.fetch(uploadImageTarget, {
+    method: 'put',
+    contentType: contentType,
+    payload: Utilities.newBlob(decodedBytes, contentType),
+    muteHttpExceptions: true
+  });
 
-  if (statusCode < 200 || statusCode >= 300) {
-    console.error('外部API エラー user=' + username + ' status=' + statusCode);
-    return createJsonResponse_(false, null, '試着画像の生成に失敗しました（外部サービスエラー）。', 502);
+  if (putResponse.getResponseCode() !== 200) {
+    throw new Error('LightX: 画像アップロードに失敗しました。status=' + putResponse.getResponseCode());
   }
 
-  let externalResult;
-  try {
-    externalResult = JSON.parse(responseText);
-  } catch (parseErr) {
-    console.error('外部APIレスポンスのJSONパースに失敗しました。');
-    return createJsonResponse_(false, null, '試着画像の生成結果を解析できませんでした。', 502);
+  return finalImageUrl;
+}
+
+/**
+ * LightXへ生成リクエストを1件発行し、orderIdだけを返す（ポーリングはしない）。
+ */
+function submitLightXOrder_(imageUrl, styleImageUrl, apiKey) {
+  const tryonResponse = UrlFetchApp.fetch(LIGHTX_BASE_URL + '/v2/aivirtualtryon', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-api-key': apiKey },
+    payload: JSON.stringify({
+      imageUrl: imageUrl,
+      styleImageUrl: styleImageUrl
+    }),
+    muteHttpExceptions: true
+  });
+
+  const tryonResult = JSON.parse(tryonResponse.getContentText());
+  const orderId = tryonResult.body ? tryonResult.body.orderId : tryonResult.orderId;
+  if (!orderId) {
+    throw new Error('LightX: 生成リクエストの発行に失敗しました。 response=' + tryonResponse.getContentText());
+  }
+  return orderId;
+}
+
+/**
+ * 複数のorderIdをまとめてポーリングする。
+ * orderIdsMap: { front: 'xxxx', side: 'yyyy' } の形式
+ * 戻り値: { front: '結果画像URL', side: '結果画像URL' }
+ */
+function pollLightXOrders_(orderIdsMap, apiKey) {
+  const results = {};
+  let pending = Object.keys(orderIdsMap);
+
+  const MAX_POLL_COUNT = 20;
+  const POLL_INTERVAL_MS = 3000;
+
+  for (let i = 0; i < MAX_POLL_COUNT && pending.length > 0; i++) {
+    Utilities.sleep(POLL_INTERVAL_MS);
+
+    for (let j = pending.length - 1; j >= 0; j--) {
+      const key = pending[j];
+      const orderId = orderIdsMap[key];
+
+      const statusResponse = UrlFetchApp.fetch(LIGHTX_BASE_URL + '/v1/order-status', {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-api-key': apiKey },
+        payload: JSON.stringify({ orderId: orderId }),
+        muteHttpExceptions: true
+      });
+
+      const statusResult = JSON.parse(statusResponse.getContentText());
+      const body = statusResult.body || statusResult;
+
+      if (body.status === 'active' && body.output) {
+        results[key] = body.output;
+        pending.splice(j, 1);
+      } else if (body.status === 'failed' || body.status === 'FAIL') {
+        throw new Error('LightX: 「' + key + '」側の画像生成に失敗しました（外部サービス側エラー）。');
+      }
+      // それ以外のステータス（init, processingなど）は継続
+    }
   }
 
-  // 外部APIのレスポンス構造に合わせて調整すること（ここでは result_image_base64 と仮定）
-  const resultImageBase64 = externalResult.result_image_base64;
-  if (!resultImageBase64) {
-    return createJsonResponse_(false, null, '試着画像が生成されませんでした。', 502);
+  if (pending.length > 0) {
+    throw new Error('LightX: 生成がタイムアウトしました。時間をおいて再度お試しください。');
   }
 
-  // 監査用ログは「誰が使ったか」程度に留め、画像本体は絶対にログしない
-  console.log('try-on success user=' + username);
+  return results;
+}
 
-  // --- 結果を即時返却。ここで扱った画像変数（modelImageBase64等）はどこにも保存せず、
-  //     この関数のスコープを抜けると同時にGCの対象となり破棄される。 ---
-  return createJsonResponse_(true, { resultImageBase64: resultImageBase64 }, null);
+/**
+ * 画像URLからバイト列を取得し、Base64のdata URLに変換する。
+ */
+function fetchImageAsBase64_(imageUrl) {
+  const response = UrlFetchApp.fetch(imageUrl, { muteHttpExceptions: true });
+  if (response.getResponseCode() !== 200) {
+    throw new Error('生成結果画像の取得に失敗しました。');
+  }
+  const blob = response.getBlob();
+  const contentType = blob.getContentType() || 'image/jpeg';
+  const base64 = Utilities.base64Encode(blob.getBytes());
+  return 'data:' + contentType + ';base64,' + base64;
 }
 
 /**
  * パスワードのハッシュ化（SHA-256 + salt）。
- * 本番運用でさらに強度を上げたい場合は、GASの範囲では限界があるため
- * 外部の認証基盤（Firebase Auth等）への移行を検討すること。
  */
 function hashPassword_(password, salt) {
   const rawBytes = Utilities.computeDigest(

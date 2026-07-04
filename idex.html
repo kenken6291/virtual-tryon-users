@@ -86,6 +86,7 @@
     .consent-row input { width: auto; margin-top: 3px; }
 
     .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .upload-card.full-width { grid-column: 1 / -1; }
     .upload-card {
       background: var(--card-bg);
       border: 2px dashed var(--border);
@@ -129,6 +130,19 @@
     #submitBtn:disabled { background: #ccc; cursor: not-allowed; }
     #resultArea { margin-top: 24px; text-align: center; }
     #resultArea img { width: 100%; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+    .result-block { margin-bottom: 20px; }
+    .download-btn {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 10px 16px;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-decoration: none;
+      text-align: center;
+    }
     .loader-wrap { display: none; flex-direction: column; align-items: center; margin-top: 24px; }
     .loader-wrap.active { display: flex; }
     .spinner {
@@ -195,16 +209,22 @@
     </div>
 
     <div class="upload-grid">
-      <div class="upload-card" id="modelCard">
-        <label class="title">自分の写真</label>
-        <label class="upload-btn" for="modelInput">撮影 / 選択</label>
-        <input type="file" id="modelInput" accept="image/*" capture="user">
-        <img class="preview" id="modelPreview" style="display:none;">
+      <div class="upload-card" id="modelFrontCard">
+        <label class="title">自分の写真（正面）</label>
+        <label class="upload-btn" for="modelFrontInput">撮影 / 選択</label>
+        <input type="file" id="modelFrontInput" accept="image/*">
+        <img class="preview" id="modelFrontPreview" style="display:none;">
       </div>
-      <div class="upload-card" id="clothCard">
+      <div class="upload-card" id="modelSideCard">
+        <label class="title">自分の写真（横向き）</label>
+        <label class="upload-btn" for="modelSideInput">撮影 / 選択</label>
+        <input type="file" id="modelSideInput" accept="image/*">
+        <img class="preview" id="modelSidePreview" style="display:none;">
+      </div>
+      <div class="upload-card full-width" id="clothCard">
         <label class="title">服の写真</label>
         <label class="upload-btn" for="clothInput">撮影 / 選択</label>
-        <input type="file" id="clothInput" accept="image/*" capture="environment">
+        <input type="file" id="clothInput" accept="image/*">
         <img class="preview" id="clothPreview" style="display:none;">
       </div>
     </div>
@@ -220,7 +240,8 @@
     <div id="resultArea"></div>
 
     <div class="footer-note">
-      ※生成された画像は端末に保存されない限り、画面を閉じると消去されます。<br>
+      ※生成された画像は「この画像を保存」ボタンから端末に保存できます。保存しない場合、画面を閉じると消去されます。<br>
+      ※iPhoneでは保存ボタンを押した後、表示された画像を長押しして「写真に保存」を選んでください。<br>
       ※本アプリのご利用は店舗スタッフの立ち会いのもとで行ってください。
     </div>
   </div>
@@ -231,11 +252,12 @@
     // 2. セッショントークンはsessionStorageにのみ保持し、タブを閉じると自動的に消える。
     // 3. 画像はBase64変換後、送信・表示が終わったら早めに変数参照を破棄する。
 
-    const APP_TOKEN = 'REPLACE_WITH_YOUR_APP_TOKEN'; // ← サーバー側と同じ値
-    const GAS_ENDPOINT = window.location.href.split('?')[0];
+    const APP_TOKEN = '5b6073b1-1825-4dd4-b2d5-9d3068d8bf2d-25caf1ca-7f5f-414b-8d1c-f85fd206f055'; // ← サーバー側と同じ値に置き換える
+    const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycby3NPPssi18u5jbB73-Sus5s70ujnWRYGSi92FPJv5HSOwtYDMH7kr89pOYpae0cjfNcA/exec'; // ← デプロイ後のWebアプリURL(.../exec)に置き換える
 
     let sessionToken = sessionStorage.getItem('vtoSessionToken') || null;
-    let modelImageBase64 = null;
+    let modelFrontImageBase64 = null;
+    let modelSideImageBase64 = null;
     let clothImageBase64 = null;
 
     const loginScreen = document.getElementById('loginScreen');
@@ -248,11 +270,14 @@
     const logoutBtn = document.getElementById('logoutBtn');
 
     const consentCheckbox = document.getElementById('consentCheckbox');
-    const modelCard = document.getElementById('modelCard');
+    const modelFrontCard = document.getElementById('modelFrontCard');
+    const modelSideCard = document.getElementById('modelSideCard');
     const clothCard = document.getElementById('clothCard');
-    const modelInput = document.getElementById('modelInput');
+    const modelFrontInput = document.getElementById('modelFrontInput');
+    const modelSideInput = document.getElementById('modelSideInput');
     const clothInput = document.getElementById('clothInput');
-    const modelPreview = document.getElementById('modelPreview');
+    const modelFrontPreview = document.getElementById('modelFrontPreview');
+    const modelSidePreview = document.getElementById('modelSidePreview');
     const clothPreview = document.getElementById('clothPreview');
     const submitBtn = document.getElementById('submitBtn');
     const loaderWrap = document.getElementById('loaderWrap');
@@ -266,6 +291,31 @@
     }
     function showMsg(el, text, type) {
       el.innerHTML = `<div class="msg ${type}">${escapeHtml(text)}</div>`;
+    }
+
+    // 結果画像＋ダウンロードボタンをまとめたブロックを作成する
+    function createResultBlock_(label, dataUrl, filename) {
+      const block = document.createElement('div');
+      block.className = 'result-block';
+
+      const title = document.createElement('p');
+      title.style.fontWeight = '600';
+      title.style.marginBottom = '6px';
+      title.textContent = label;
+      block.appendChild(title);
+
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      block.appendChild(img);
+
+      const downloadLink = document.createElement('a');
+      downloadLink.href = dataUrl;
+      downloadLink.download = filename;
+      downloadLink.className = 'download-btn';
+      downloadLink.textContent = '📥 この画像を保存';
+      block.appendChild(downloadLink);
+
+      return block;
     }
 
     // 起動時: セッションがあればメイン画面へ
@@ -317,7 +367,8 @@
       sessionToken = null;
       mainScreen.classList.remove('active');
       loginScreen.classList.add('active');
-      modelImageBase64 = null;
+      modelFrontImageBase64 = null;
+      modelSideImageBase64 = null;
       clothImageBase64 = null;
       resultArea.innerHTML = '';
       msgArea.innerHTML = '';
@@ -326,7 +377,8 @@
     // ===== 同意チェックボックスでアップロードカードを有効化 =====
     consentCheckbox.addEventListener('change', () => {
       const enabled = consentCheckbox.checked;
-      modelCard.classList.toggle('enabled', enabled);
+      modelFrontCard.classList.toggle('enabled', enabled);
+      modelSideCard.classList.toggle('enabled', enabled);
       clothCard.classList.toggle('enabled', enabled);
       if (!enabled) {
         submitBtn.disabled = true;
@@ -369,15 +421,16 @@
         }
       });
     }
-    handleFileSelect(modelInput, modelPreview, modelCard, (b64) => { modelImageBase64 = b64; });
+    handleFileSelect(modelFrontInput, modelFrontPreview, modelFrontCard, (b64) => { modelFrontImageBase64 = b64; });
+    handleFileSelect(modelSideInput, modelSidePreview, modelSideCard, (b64) => { modelSideImageBase64 = b64; });
     handleFileSelect(clothInput, clothPreview, clothCard, (b64) => { clothImageBase64 = b64; });
 
     function updateSubmitState() {
-      submitBtn.disabled = !(consentCheckbox.checked && modelImageBase64 && clothImageBase64);
+      submitBtn.disabled = !(consentCheckbox.checked && modelFrontImageBase64 && modelSideImageBase64 && clothImageBase64);
     }
 
     submitBtn.addEventListener('click', async () => {
-      if (!modelImageBase64 || !clothImageBase64 || !sessionToken) return;
+      if (!modelFrontImageBase64 || !modelSideImageBase64 || !clothImageBase64 || !sessionToken) return;
 
       msgArea.innerHTML = '';
       resultArea.innerHTML = '';
@@ -392,7 +445,8 @@
             action: 'tryon',
             appToken: APP_TOKEN,
             sessionToken: sessionToken,
-            modelImageBase64: modelImageBase64,
+            modelFrontImageBase64: modelFrontImageBase64,
+            modelSideImageBase64: modelSideImageBase64,
             clothImageBase64: clothImageBase64
           })
         });
@@ -410,14 +464,20 @@
           return;
         }
 
-        const imgTag = document.createElement('img');
-        imgTag.src = result.resultImageBase64.startsWith('data:')
-          ? result.resultImageBase64
-          : 'data:image/jpeg;base64,' + result.resultImageBase64;
-        resultArea.appendChild(imgTag);
+        const frontDataUrl = result.resultFrontImageBase64.startsWith('data:')
+          ? result.resultFrontImageBase64
+          : 'data:image/jpeg;base64,' + result.resultFrontImageBase64;
+        const sideDataUrl = result.resultSideImageBase64.startsWith('data:')
+          ? result.resultSideImageBase64
+          : 'data:image/jpeg;base64,' + result.resultSideImageBase64;
+
+        resultArea.appendChild(createResultBlock_('正面', frontDataUrl, 'tryon-front.jpg'));
+        resultArea.appendChild(createResultBlock_('横向き', sideDataUrl, 'tryon-side.jpg'));
+
         showMsg(msgArea, '試着画像を生成しました！', 'success');
 
-        modelImageBase64 = null;
+        modelFrontImageBase64 = null;
+        modelSideImageBase64 = null;
         clothImageBase64 = null;
 
       } catch (err) {
