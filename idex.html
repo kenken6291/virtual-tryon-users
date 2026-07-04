@@ -116,6 +116,26 @@
       cursor: pointer;
     }
     input[type="file"] { display: none; }
+
+    .garment-type-row {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 10px;
+      font-size: 0.8rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .garment-type-option {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .garment-type-option input {
+      width: auto;
+      margin: 0;
+    }
+
     #submitBtn {
       width: 100%;
       padding: 14px;
@@ -223,6 +243,26 @@
       </div>
       <div class="upload-card full-width" id="clothCard">
         <label class="title">服の写真</label>
+
+        <div class="garment-type-row">
+          <label class="garment-type-option">
+            <input type="radio" name="garmentType" value="shirt" checked>
+            <span>シャツ</span>
+          </label>
+          <label class="garment-type-option">
+            <input type="radio" name="garmentType" value="jacket">
+            <span>上着</span>
+          </label>
+          <label class="garment-type-option">
+            <input type="radio" name="garmentType" value="bottom">
+            <span>パンツ・スカート</span>
+          </label>
+          <label class="garment-type-option">
+            <input type="radio" name="garmentType" value="dress">
+            <span>ワンピース</span>
+          </label>
+        </div>
+
         <label class="upload-btn" for="clothInput">撮影 / 選択</label>
         <input type="file" id="clothInput" accept="image/*">
         <img class="preview" id="clothPreview" style="display:none;">
@@ -437,6 +477,10 @@
       submitBtn.disabled = true;
       loaderWrap.classList.add('active');
 
+      const garmentTypeInput = document.querySelector('input[name="garmentType"]:checked');
+      const garmentType = garmentTypeInput ? garmentTypeInput.value : 'shirt';
+      const garmentTypeLabel = { shirt: 'シャツ', jacket: '上着', bottom: 'パンツ・スカート', dress: 'ワンピース' }[garmentType] || '服';
+
       try {
         const response = await fetch(GAS_ENDPOINT, {
           method: 'POST',
@@ -447,7 +491,8 @@
             sessionToken: sessionToken,
             modelFrontImageBase64: modelFrontImageBase64,
             modelSideImageBase64: modelSideImageBase64,
-            clothImageBase64: clothImageBase64
+            clothImageBase64: clothImageBase64,
+            garmentType: garmentType
           })
         });
 
@@ -471,8 +516,8 @@
           ? result.resultSideImageBase64
           : 'data:image/jpeg;base64,' + result.resultSideImageBase64;
 
-        resultArea.appendChild(createResultBlock_('正面', frontDataUrl, 'tryon-front.jpg'));
-        resultArea.appendChild(createResultBlock_('横向き', sideDataUrl, 'tryon-side.jpg'));
+        resultArea.appendChild(createResultBlock_('正面（' + garmentTypeLabel + '）', frontDataUrl, 'tryon-front-' + garmentType + '.jpg'));
+        resultArea.appendChild(createResultBlock_('横向き（' + garmentTypeLabel + '）', sideDataUrl, 'tryon-side-' + garmentType + '.jpg'));
 
         showMsg(msgArea, '試着画像を生成しました！', 'success');
 

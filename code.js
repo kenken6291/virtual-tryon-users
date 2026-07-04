@@ -145,7 +145,8 @@ function handleLogin_(payload, scriptProps) {
 /**
  * 試着画像生成処理（要セッショントークン）。
  * 期待するpayload: { action:'tryon', appToken, sessionToken,
- *                     modelFrontImageBase64, modelSideImageBase64, clothImageBase64 }
+ *                     modelFrontImageBase64, modelSideImageBase64, clothImageBase64,
+ *                     garmentType }
  * ★画像はDrive等に保存せず、この関数のスコープ内でのみ扱い、
  *   レスポンス返却と同時に変数は破棄される（ガベージコレクション対象）。
  */
@@ -163,6 +164,7 @@ function handleTryOn_(payload, scriptProps) {
   const modelFrontImageBase64 = payload.modelFrontImageBase64;
   const modelSideImageBase64 = payload.modelSideImageBase64;
   const clothImageBase64 = payload.clothImageBase64;
+  const garmentType = payload.garmentType || 'shirt'; // 'shirt' | 'jacket' | 'bottom' | 'dress'
 
   if (!modelFrontImageBase64 || !modelSideImageBase64 || !clothImageBase64) {
     return createJsonResponse_(false, null, '画像データが不足しています。', 400);
@@ -189,8 +191,8 @@ function handleTryOn_(payload, scriptProps) {
 
     // ② 正面・横向き、それぞれの生成リクエストを発行
     const orderIds = {
-      front: submitLightXOrder_(frontImageUrl, clothImageUrl, apiKey),
-      side: submitLightXOrder_(sideImageUrl, clothImageUrl, apiKey)
+      front: submitLightXOrder_(frontImageUrl, clothImageUrl, apiKey, garmentType),
+      side: submitLightXOrder_(sideImageUrl, clothImageUrl, apiKey, garmentType)
     };
 
     // ③ 両方の結果が揃うまでまとめてポーリング
@@ -200,7 +202,7 @@ function handleTryOn_(payload, scriptProps) {
     const resultFrontImageBase64 = fetchImageAsBase64_(resultUrls.front);
     const resultSideImageBase64 = fetchImageAsBase64_(resultUrls.side);
 
-    console.log('try-on success user=' + username);
+    console.log('try-on success user=' + username + ' garmentType=' + garmentType);
     return createJsonResponse_(true, {
       resultFrontImageBase64: resultFrontImageBase64,
       resultSideImageBase64: resultSideImageBase64
@@ -258,15 +260,18 @@ function uploadImageToLightX_(base64DataUrl, apiKey) {
 
 /**
  * LightXへ生成リクエストを1件発行し、orderIdだけを返す（ポーリングはしない）。
+ * ※garmentTypeはLightX公式ドキュメントには未記載のパラメータ。
+ *   将来的な仕様対応を見越して送信しているが、現時点で結果への影響は未確認。
  */
-function submitLightXOrder_(imageUrl, styleImageUrl, apiKey) {
+function submitLightXOrder_(imageUrl, styleImageUrl, apiKey, garmentType) {
   const tryonResponse = UrlFetchApp.fetch(LIGHTX_BASE_URL + '/v2/aivirtualtryon', {
     method: 'post',
     contentType: 'application/json',
     headers: { 'x-api-key': apiKey },
     payload: JSON.stringify({
       imageUrl: imageUrl,
-      styleImageUrl: styleImageUrl
+      styleImageUrl: styleImageUrl,
+      garmentType: garmentType
     }),
     muteHttpExceptions: true
   });
