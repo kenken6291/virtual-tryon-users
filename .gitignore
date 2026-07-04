@@ -1,0 +1,32 @@
+# ===== clasp関連 =====
+.clasp.json
+.clasprc.json
+
+# ===== 認証情報・秘匿情報 =====
+*.key
+*.pem
+.env
+.env.*
+credentials.json
+secrets.json
+
+# ===== Node.js関連（clasp/CLIツール利用時） =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ===== ビルド成果物 =====
+dist/
+build/
+.DS_Store
+
+# ===== エディタ関連 =====
+.vscode/
+.idea/
+*.swp
+
+# ===== ログ・一時ファイル =====
+*.log
+tmp/

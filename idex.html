@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Virtual Try-On</title>
+  <style>
+    :root {
+      --primary: #2d2d2d;
+      --accent: #ff6b6b;
+      --bg: #f7f7f8;
+      --card-bg: #ffffff;
+      --border: #e0e0e0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+      background: var(--bg);
+      color: var(--primary);
+      padding: 16px;
+      padding-bottom: 40px;
+    }
+    h1 { font-size: 1.3rem; text-align: center; margin: 8px 0 20px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+
+    /* ログイン画面 */
+    .login-card {
+      background: var(--card-bg);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 360px;
+      margin: 40px auto 0;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+    .login-card label { font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 4px; }
+    .login-card input {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.95rem;
+    }
+    .login-card button, #logoutBtn {
+      width: 100%;
+      padding: 12px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 0.8rem;
+      color: #555;
+    }
+    #logoutBtn { width: auto; padding: 6px 12px; font-size: 0.75rem; background: #999; }
+
+    /* 利用規約・免責事項 */
+    .disclaimer-box {
+      background: #fff8e1;
+      border: 1px solid #ffe082;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      max-height: 160px;
+      overflow-y: auto;
+      margin-bottom: 12px;
+      color: #5c4a00;
+    }
+    .consent-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 0.78rem;
+      margin-bottom: 16px;
+    }
+    .consent-row input { width: auto; margin-top: 3px; }
+
+    .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .upload-card {
+      background: var(--card-bg);
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      text-align: center;
+      min-height: 160px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.5;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .upload-card.enabled { opacity: 1; pointer-events: auto; }
+    .upload-card.has-image { border-style: solid; border-color: var(--accent); }
+    .upload-card label.title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; display: block; }
+    .upload-card img.preview { width: 100%; max-height: 120px; object-fit: cover; border-radius: 8px; margin-top: 8px; }
+    .upload-btn {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    input[type="file"] { display: none; }
+    #submitBtn {
+      width: 100%;
+      padding: 14px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #fff;
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    #submitBtn:disabled { background: #ccc; cursor: not-allowed; }
+    #resultArea { margin-top: 24px; text-align: center; }
+    #resultArea img { width: 100%; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+    .loader-wrap { display: none; flex-direction: column; align-items: center; margin-top: 24px; }
+    .loader-wrap.active { display: flex; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-text { margin-top: 10px; font-size: 0.85rem; color: #666; }
+    .msg { text-align: center; font-size: 0.85rem; margin-top: 12px; padding: 10px; border-radius: 8px; }
+    .msg.error { background: #ffe3e3; color: #c92a2a; }
+    .msg.success { background: #e6fcf5; color: #087f5b; }
+    .footer-note {
+      margin-top: 30px;
+      font-size: 0.68rem;
+      color: #999;
+      text-align: center;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== ログイン画面 ===== -->
+  <div class="screen active" id="loginScreen">
+    <h1>📸 かんたん仮想試着</h1>
+    <div class="login-card">
+      <label for="loginUsername">スタッフID</label>
+      <input type="text" id="loginUsername" autocomplete="username">
+      <label for="loginPassword">パスワード</label>
+      <input type="password" id="loginPassword" autocomplete="current-password">
+      <button id="loginBtn">ログイン</button>
+      <div id="loginMsgArea"></div>
+    </div>
+    <div class="footer-note">
+      このシステムは店舗スタッフによる操作を前提としています。<br>
+      アカウントをお持ちでない場合は管理者にお問い合わせください。
+    </div>
+  </div>
+
+  <!-- ===== メイン画面（ログイン後） ===== -->
+  <div class="screen" id="mainScreen">
+    <div class="topbar">
+      <span id="welcomeText"></span>
+      <button id="logoutBtn">ログアウト</button>
+    </div>
+    <h1>📸 かんたん仮想試着</h1>
+
+    <!-- 利用規約・免責事項 -->
+    <div class="disclaimer-box">
+      <strong>【ご利用にあたっての注意事項・免責事項】</strong><br>
+      1. 本サービスはAI技術により試着イメージを生成するものであり、実際の着用感・サイズ感・色味を完全に再現するものではありません。生成画像はあくまで参考イメージとしてご利用ください。<br>
+      2. アップロードされたお客様の写真および服の写真は、試着画像の生成処理のためにのみ一時的に使用され、処理完了後にサーバー上へ保存されることなく即時破棄されます。ただし、通信経路上のデータや外部試着API提供事業者側の取り扱いについては、当該事業者のプライバシーポリシーに準じます。<br>
+      3. お客様ご本人以外の方の写真を、本人の同意なく撮影・アップロードすることはお控えください。<br>
+      4. 生成された画像は当日のご案内・接客目的以外での二次利用（SNS投稿・印刷配布等）を想定しておりません。<br>
+      5. システム障害・通信エラー等により、画像が正常に生成されない場合があります。あらかじめご了承ください。<br>
+      6. 本サービスの利用により生じたいかなる損害についても、当店および提供事業者は一切の責任を負わないものとします。
+    </div>
+    <div class="consent-row">
+      <input type="checkbox" id="consentCheckbox">
+      <label for="consentCheckbox">上記の注意事項・免責事項の内容を確認し、同意します。（お客様への説明・同意取得はスタッフの責任で実施してください）</label>
+    </div>
+
+    <div class="upload-grid">
+      <div class="upload-card" id="modelCard">
+        <label class="title">自分の写真</label>
+        <label class="upload-btn" for="modelInput">撮影 / 選択</label>
+        <input type="file" id="modelInput" accept="image/*" capture="user">
+        <img class="preview" id="modelPreview" style="display:none;">
+      </div>
+      <div class="upload-card" id="clothCard">
+        <label class="title">服の写真</label>
+        <label class="upload-btn" for="clothInput">撮影 / 選択</label>
+        <input type="file" id="clothInput" accept="image/*" capture="environment">
+        <img class="preview" id="clothPreview" style="display:none;">
+      </div>
+    </div>
+
+    <button id="submitBtn" disabled>試着画像を生成する</button>
+
+    <div class="loader-wrap" id="loaderWrap">
+      <div class="spinner"></div>
+      <div class="loader-text">生成中です。しばらくお待ちください…</div>
+    </div>
+
+    <div id="msgArea"></div>
+    <div id="resultArea"></div>
+
+    <div class="footer-note">
+      ※生成された画像は端末に保存されない限り、画面を閉じると消去されます。<br>
+      ※本アプリのご利用は店舗スタッフの立ち会いのもとで行ってください。
+    </div>
+  </div>
+
+  <script>
+    // ===== セキュリティ注意点 =====
+    // 1. APP_TOKENはあくまで「簡易的な」不正利用抑止であり、機密情報ではない前提で扱う。
+    // 2. セッショントークンはsessionStorageにのみ保持し、タブを閉じると自動的に消える。
+    // 3. 画像はBase64変換後、送信・表示が終わったら早めに変数参照を破棄する。
+
+    const APP_TOKEN = 'REPLACE_WITH_YOUR_APP_TOKEN'; // ← サーバー側と同じ値
+    const GAS_ENDPOINT = window.location.href.split('?')[0];
+
+    let sessionToken = sessionStorage.getItem('vtoSessionToken') || null;
+    let modelImageBase64 = null;
+    let clothImageBase64 = null;
+
+    const loginScreen = document.getElementById('loginScreen');
+    const mainScreen = document.getElementById('mainScreen');
+    const loginUsername = document.getElementById('loginUsername');
+    const loginPassword = document.getElementById('loginPassword');
+    const loginBtn = document.getElementById('loginBtn');
+    const loginMsgArea = document.getElementById('loginMsgArea');
+    const welcomeText = document.getElementById('welcomeText');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    const consentCheckbox = document.getElementById('consentCheckbox');
+    const modelCard = document.getElementById('modelCard');
+    const clothCard = document.getElementById('clothCard');
+    const modelInput = document.getElementById('modelInput');
+    const clothInput = document.getElementById('clothInput');
+    const modelPreview = document.getElementById('modelPreview');
+    const clothPreview = document.getElementById('clothPreview');
+    const submitBtn = document.getElementById('submitBtn');
+    const loaderWrap = document.getElementById('loaderWrap');
+    const msgArea = document.getElementById('msgArea');
+    const resultArea = document.getElementById('resultArea');
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+    function showMsg(el, text, type) {
+      el.innerHTML = `<div class="msg ${type}">${escapeHtml(text)}</div>`;
+    }
+
+    // 起動時: セッションがあればメイン画面へ
+    if (sessionToken) {
+      showMainScreen_();
+    }
+
+    // ===== ログイン処理 =====
+    loginBtn.addEventListener('click', async () => {
+      const username = loginUsername.value.trim();
+      const password = loginPassword.value;
+      if (!username || !password) {
+        showMsg(loginMsgArea, 'スタッフIDとパスワードを入力してください。', 'error');
+        return;
+      }
+      loginBtn.disabled = true;
+      try {
+        const res = await fetch(GAS_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'login', appToken: APP_TOKEN, username, password })
+        });
+        const result = await res.json();
+        if (!result.success) {
+          showMsg(loginMsgArea, result.message || 'ログインに失敗しました。', 'error');
+          return;
+        }
+        sessionToken = result.sessionToken;
+        sessionStorage.setItem('vtoSessionToken', sessionToken);
+        sessionStorage.setItem('vtoDisplayName', result.displayName || username);
+        loginPassword.value = ''; // パスワードは即座にクリア
+        showMainScreen_();
+      } catch (err) {
+        showMsg(loginMsgArea, '通信エラーが発生しました。', 'error');
+      } finally {
+        loginBtn.disabled = false;
+      }
+    });
+
+    function showMainScreen_() {
+      loginScreen.classList.remove('active');
+      mainScreen.classList.add('active');
+      welcomeText.textContent = (sessionStorage.getItem('vtoDisplayName') || '') + ' さん';
+    }
+
+    logoutBtn.addEventListener('click', () => {
+      sessionStorage.removeItem('vtoSessionToken');
+      sessionStorage.removeItem('vtoDisplayName');
+      sessionToken = null;
+      mainScreen.classList.remove('active');
+      loginScreen.classList.add('active');
+      modelImageBase64 = null;
+      clothImageBase64 = null;
+      resultArea.innerHTML = '';
+      msgArea.innerHTML = '';
+    });
+
+    // ===== 同意チェックボックスでアップロードカードを有効化 =====
+    consentCheckbox.addEventListener('change', () => {
+      const enabled = consentCheckbox.checked;
+      modelCard.classList.toggle('enabled', enabled);
+      clothCard.classList.toggle('enabled', enabled);
+      if (!enabled) {
+        submitBtn.disabled = true;
+      } else {
+        updateSubmitState();
+      }
+    });
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function handleFileSelect(inputEl, previewEl, cardEl, onLoaded) {
+      inputEl.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          showMsg(msgArea, '画像ファイルを選択してください。', 'error');
+          return;
+        }
+        const MAX_SIZE_MB = 10;
+        if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+          showMsg(msgArea, `画像サイズは${MAX_SIZE_MB}MB以下にしてください。`, 'error');
+          return;
+        }
+        try {
+          const base64 = await fileToBase64(file);
+          previewEl.src = base64;
+          previewEl.style.display = 'block';
+          cardEl.classList.add('has-image');
+          onLoaded(base64);
+          updateSubmitState();
+        } catch (err) {
+          showMsg(msgArea, '画像の読み込みに失敗しました。', 'error');
+        }
+      });
+    }
+    handleFileSelect(modelInput, modelPreview, modelCard, (b64) => { modelImageBase64 = b64; });
+    handleFileSelect(clothInput, clothPreview, clothCard, (b64) => { clothImageBase64 = b64; });
+
+    function updateSubmitState() {
+      submitBtn.disabled = !(consentCheckbox.checked && modelImageBase64 && clothImageBase64);
+    }
+
+    submitBtn.addEventListener('click', async () => {
+      if (!modelImageBase64 || !clothImageBase64 || !sessionToken) return;
+
+      msgArea.innerHTML = '';
+      resultArea.innerHTML = '';
+      submitBtn.disabled = true;
+      loaderWrap.classList.add('active');
+
+      try {
+        const response = await fetch(GAS_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'tryon',
+            appToken: APP_TOKEN,
+            sessionToken: sessionToken,
+            modelImageBase64: modelImageBase64,
+            clothImageBase64: clothImageBase64
+          })
+        });
+
+        if (!response.ok) throw new Error('通信エラー (status: ' + response.status + ')');
+        const result = await response.json();
+
+        if (!result.success) {
+          if (result.httpStatus === 401) {
+            showMsg(msgArea, 'セッションが切れました。再度ログインしてください。', 'error');
+            logoutBtn.click();
+            return;
+          }
+          showMsg(msgArea, result.message || '生成に失敗しました。', 'error');
+          return;
+        }
+
+        const imgTag = document.createElement('img');
+        imgTag.src = result.resultImageBase64.startsWith('data:')
+          ? result.resultImageBase64
+          : 'data:image/jpeg;base64,' + result.resultImageBase64;
+        resultArea.appendChild(imgTag);
+        showMsg(msgArea, '試着画像を生成しました！', 'success');
+
+        modelImageBase64 = null;
+        clothImageBase64 = null;
+
+      } catch (err) {
+        showMsg(msgArea, 'エラーが発生しました: ' + err.message, 'error');
+      } finally {
+        loaderWrap.classList.remove('active');
+        updateSubmitState();
+      }
+    });
+  </script>
+</body>
+</html>
